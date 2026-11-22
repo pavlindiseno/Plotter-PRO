@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#1e293b">
+<meta name="description" content="Montaje de pegatinas con CutContour y marcas OPOS para imprimir y cortar.">
+<title>Plotter Fácil</title>
+<link rel="icon" type="image/png" href="./plotter-logo.png">
+<link rel="apple-touch-icon" href="./plotter-logo.png">
+<link rel="stylesheet" href="./style.css?v=6">
+<script src="./vendor/pdf-lib.js" defer></script>
+<script src="./vendor/clipper.js" defer></script>
+<script type="module" src="./app.mjs?v=6"></script>
+</head>
+<body>
+<header class="top"><div class="top-inner">
+  <a class="brand" href="./"><img class="brand-img" src="./plotter-logo.png" alt="" width="42" height="42">Plotter Fácil</a>
+  <span class="top-label">Impresión <span aria-hidden="true">+</span> corte</span>
+</div></header>
+<main>
+  <div class="intro"><h1>Montaje de pegatinas</h1><p>Prepara la tirada y descarga los PDF de impresión y corte a escala real.</p></div>
+  <div class="workspace">
+    <section class="setup" aria-label="Configuración del montaje">
+      <div class="settings-block">
+        <div class="section-heading"><h2>Archivo original</h2><button id="demo" class="quiet" type="button">Probar ejemplo</button></div>
+        <div class="drop" id="drop">
+          <span id="file-icon" class="file-icon" aria-hidden="true">PDF</span>
+          <span class="file-caption"><small id="filename" hidden></small><small id="filemeta">PDF de una página, JPG o PNG. También puedes arrastrarlo aquí.</small></span>
+          <input id="file" type="file" aria-label="Seleccionar o cambiar archivo" aria-describedby="filemeta">
+        </div>
+        <p class="file-status" id="file-status" aria-live="polite" hidden></p>
+      </div>
+      <form id="settings" class="settings-block" autocomplete="off">
+        <div id="size-settings" class="contour-settings" hidden>
+          <h2>Tamaño del original</h2>
+          <div class="inputs">
+            <label>Ajustar por <select id="size-mode"><option value="percent">Porcentaje</option><option value="height">Altura</option><option value="width">Anchura</option></select></label>
+            <label><span id="size-label">Escala</span> <span class="field"><input id="size-value" type="number" min="0.01" step="any" value="100"><span id="size-unit">%</span></span></label>
+            <label id="reference-sizing" hidden>Anchura de referencia al 100 % <span class="field"><input id="reference-width" type="number" min="0.01" max="5080" step="any" placeholder="p. ej. 100"><span>mm</span></span></label>
+          </div>
+          <p id="size-result" class="field-help" aria-live="polite"></p>
+          <p id="size-error" class="error" role="alert" hidden></p>
+        </div>
+        <div id="contour-settings" class="contour-settings" hidden>
+          <h2>Línea de corte</h2>
+          <div class="inputs">
+            <label id="source-mode">Origen<select id="contour-mode"><option value="original">CutContour original</option><option value="automatic">Detectar silueta</option></select></label>
+            <label>Desplazamiento <span class="field"><input id="offset" type="number" min="-5080" max="5080" step="any" value="0"><span>mm</span></span></label>
+            <label id="tolerance-setting" hidden>Tolerancia del fondo <span class="field"><input id="tolerance" type="number" min="1" max="120" value="30"></span></label>
+          </div>
+          <p class="field-help">Los valores positivos desplazan el corte hacia fuera. Los negativos lo meten en el dibujo.</p>
+          <p id="contour-error" class="error" role="alert" hidden></p>
+        </div>
+        <h2>Bobina y tirada</h2>
+        <div class="inputs">
+          <label>Ancho de bobina <span class="field"><input id="roll" type="number" min="0.01" max="5080" step="any" value="1370"><span>mm</span></span></label>
+          <label>Cantidad <span class="field"><input id="quantity" type="number" min="1" max="50000" value="100"><span>uds.</span></span></label>
+          <label>Entre contornos <span class="field"><input id="gap" type="number" min="0" step="any" value="3"><span>mm</span></span></label>
+          <label>Margen exterior <span class="field"><input id="margin" type="number" min="0" step="any" value="10"><span>mm</span></span></label>
+        </div>
+        <p class="field-help">Mide el ancho que admite el montaje. El margen exterior deja sitio para el registro OPOS.</p>
+        <details class="crop">
+          <summary>Recortar la página del original</summary>
+          <label>Sangrado que se conserva <span class="field"><input id="bleed" type="number" min="0" step="any" placeholder="Sin recortar"><span>mm</span></span></label>
+          <p class="field-help">Escribe cuántos milímetros del original quieres conservar alrededor del contorno. Vacío aplica el recorte automático en siluetas o cortes desplazados. A 0 mm, el CutContour original usa toda la página.</p>
+        </details>
+      </form>
+      <div class="settings-block delivery">
+        <h2>Descargar PDF</h2>
+        <p id="layout-error" class="error" role="alert" hidden></p>
+        <button class="download primary" id="prepare" type="button" disabled>Preparar los dos PDF</button>
+        <div id="export-files" class="export-files" hidden>
+          <div><a class="download primary" id="print" download>Descargar PDF de impresión</a><a class="open-pdf" id="open-print" target="_blank" rel="noopener">Abrir impresión</a></div>
+          <div><a class="download secondary" id="cut" download>Descargar PDF de corte</a><a class="open-pdf" id="open-cut" target="_blank" rel="noopener">Abrir corte</a></div>
+        </div>
+        <p class="field-help">Importa ambos al 100 %, sin ajustar la escala ni recortar la página.</p>
+        <p id="export-status" aria-live="polite" class="file-status" hidden></p>
+      </div>
+    </section>
+    <section class="proof" aria-label="Vista previa del montaje">
+      <div class="proof-head">
+        <div><h2>Vista previa</h2><p id="proof-info">Carga un archivo para calcular el montaje.</p></div>
+        <div class="switch" aria-label="Contenido de la vista">
+          <button id="show-print" type="button" aria-pressed="true">Impresión</button>
+          <button id="show-overlay" type="button" aria-pressed="false">Con contorno</button>
+          <button id="show-cut" type="button" aria-pressed="false">Corte</button>
+        </div>
+      </div>
+      <div class="zoom-tools" id="zoom-tools" hidden role="group" aria-label="Zoom del montaje">
+        <button type="button" id="zoom-out" aria-label="Alejar">−</button>
+        <output id="zoom-value" aria-live="polite">100 %</output>
+        <button type="button" id="zoom-in" aria-label="Acercar">+</button>
+        <button type="button" id="zoom-fit">Ajustar</button>
+      </div>
+      <div class="proof-content" id="viewport" tabindex="0" aria-label="Mesa de trabajo desplazable">
+        <div class="empty" id="empty"><span class="empty-shape" aria-hidden="true"><i></i><i></i><i></i><i></i></span><strong>El montaje aparecerá aquí</strong><span>Sube la etiqueta del cliente o abre el ejemplo.</span></div>
+        <div id="sheet" class="sheet" hidden>
+          <div class="ruler"><span id="sheet-width"></span></div>
+          <canvas id="canvas" aria-label="Vista previa de las etiquetas y marcas OPOS"></canvas>
+          <div id="preview-message" class="preview-message" hidden></div>
+        </div>
+      </div>
+      <div class="proof-footer">
+        <span><i class="mark" aria-hidden="true"></i> OPOS · 3 × 3 mm</span>
+        <label id="page-control" hidden>Paño <select id="panel" aria-label="Paño de la vista previa"></select></label>
+        <span id="proof-marks"></span>
+      </div>
+      <div class="stats">
+        <div><span>Copias</span><strong id="stat-count">—</strong></div>
+        <div><span>Columnas × filas</span><strong id="stat-grid">—</strong></div>
+        <div><span>Largo total</span><strong id="stat-length">—</strong></div>
+      </div>
+    </section>
+  </div>
+  <footer>Los archivos se procesan en este navegador.</footer>
+</main>
+</body>
+</html>
