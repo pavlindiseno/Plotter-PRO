@@ -11,7 +11,7 @@
 <link rel="stylesheet" href="./style.css?v=6">
 <script src="./vendor/pdf-lib.js" defer></script>
 <script src="./vendor/clipper.js" defer></script>
-<script type="module" src="./app.mjs?v=6"></script>
+<script type="module" src="./app.mjs?v=7"></script>
 </head>
 <body>
 <header class="top"><div class="top-inner">
@@ -27,7 +27,14 @@
         <div class="drop" id="drop">
           <span id="file-icon" class="file-icon" aria-hidden="true">PDF</span>
           <span class="file-caption"><small id="filename" hidden></small><small id="filemeta">PDF de una página, JPG o PNG. También puedes arrastrarlo aquí.</small></span>
-          <input id="file" type="file" aria-label="Seleccionar o cambiar archivo" aria-describedby="filemeta">
+          <label class="file-choice" style="grid-column: 1 / -1">
+            <strong>Elegir de Fotos</strong>
+            <input id="photo" type="file" accept="image/*" aria-describedby="filemeta">
+          </label>
+          <label class="file-choice" style="grid-column: 1 / -1">
+            <strong>Elegir de Archivos</strong>
+            <input id="file" type="file" aria-describedby="filemeta">
+          </label>
         </div>
         <p class="file-status" id="file-status" aria-live="polite" hidden></p>
       </div>
