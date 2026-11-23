@@ -336,7 +336,41 @@ async function prepareExports() {
   }
 }
 
+async function photoBytes(file) {
+  const bytes=await file.arrayBuffer();
+  const signature=new Uint8Array(bytes,0,Math.min(bytes.byteLength,4));
+  const jpeg=signature[0]===255 && signature[1]===216;
+  const png=signature[0]===137 && signature[1]===80 && signature[2]===78 && signature[3]===71;
+  if (jpeg || png) return bytes;
+
+  const url=URL.createObjectURL(file);
+  try {
+    const image=new Image();
+    image.src=url;
+    await image.decode();
+    const canvas=document.createElement('canvas');
+    canvas.width=image.naturalWidth;
+    canvas.height=image.naturalHeight;
+    const context=canvas.getContext('2d');
+    if (!context) throw new Error('No hay contexto para la imagen');
+    context.drawImage(image,0,0);
+    const pngBlob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+    if (!pngBlob) throw new Error('No se pudo convertir la imagen');
+    return await pngBlob.arrayBuffer();
+  } catch {
+    throw new Error('Este navegador no puede abrir el formato de la foto. Prueba a exportarla como JPG o PNG.');
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function loadFile(file) { if (file) load(file.name, () => file.arrayBuffer()); }
+by('photo')?.addEventListener('change', (event) => {
+  const input=event.currentTarget;
+  const file=input.files[0];
+  if (file) load(file.name, () => photoBytes(file));
+  input.value='';
+});
 fileField.addEventListener('change', () => { loadFile(fileField.files[0]); fileField.value = ''; });
 drop.addEventListener('dragover', (event) => { event.preventDefault(); drop.classList.add('active'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('active'));
