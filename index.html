@@ -7,11 +7,13 @@
 <meta name="description" content="Montaje de pegatinas con CutContour y marcas OPOS para imprimir y cortar.">
 <title>Plotter Fácil</title>
 <link rel="icon" type="image/png" href="./plotter-logo.png">
-<link rel="apple-touch-icon" href="./plotter-logo.png">
+<link rel="apple-touch-icon" sizes="192x192" href="./icon-192.png">
+<link rel="manifest" href="./manifest.webmanifest">
 <link rel="stylesheet" href="./style.css?v=6">
 <script src="./vendor/pdf-lib.js" defer></script>
 <script src="./vendor/clipper.js" defer></script>
 <script type="module" src="./app.mjs?v=7"></script>
+<script defer src="./install.js"></script>
 </head>
 <body>
 <header class="top"><div class="top-inner">
@@ -19,7 +21,7 @@
   <span class="top-label">Impresión <span aria-hidden="true">+</span> corte</span>
 </div></header>
 <main>
-  <div class="intro"><h1>Montaje de pegatinas</h1><p>Prepara la tirada y descarga los PDF de impresión y corte a escala real.</p></div>
+  <div class="intro"><h1>Montaje de pegatinas</h1><p>Prepara la tirada y descarga los PDF de impresión y corte a escala real.</p><button type="button" class="quiet" id="install-app" hidden>Instalar Plotter Fácil</button></div>
   <div class="workspace">
     <section class="setup" aria-label="Configuración del montaje">
       <div class="settings-block">
