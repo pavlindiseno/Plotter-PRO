@@ -1,9 +1,9 @@
-import {PT, inspect, openImage, artworkSize, scaleSource, withContour, layout, build, renderSource, sample} from './engine.mjs?v=5';
+import {PT, inspectPages, openImage, artworkSize, scaleSource, withContour, layout, layoutMixed, build, renderSource, sample} from './engine.mjs?v=6';
 import {detect, offsetPaths} from './contour.mjs';
 
 const by = (id) => document.getElementById(id);
 const fmt = (value) => value.toLocaleString('es-ES', {maximumFractionDigits:2});
-const model = {original:null, source:null, plan:null, name:'', page:0, mode:'print', version:0, thumb:null, raster:null, thumbError:false, detection:null, geometry:null, sized:null, urls:[], busy:false, zoom:1, displayScale:0, zoomAnchor:null};
+const model = {original:null, batch:null, source:null, plan:null, name:'', page:0, mode:'print', version:0, thumb:null, raster:null, thumbError:false, detection:null, geometry:null, sized:null, urls:[], busy:false, zoom:1, displayScale:0, zoomAnchor:null};
 const fileField = by('file');
 const drop = by('drop');
 const canvas = by('canvas');
@@ -116,6 +116,30 @@ function updateGeometry() {
   }
 }
 
+function mixedSources() {
+  let firstError;
+  const sources=model.batch.entries.map((entry,index) => {
+    try {
+      if (!entry.paths) throw new Error(entry.error);
+      const input=entry.offset;
+      const mm=input.value==='' && !input.validity.badInput ? by('batch-offset').valueAsNumber : input.valueAsNumber;
+      if (entry.sized?.mm!==mm) {
+        const source=withContour(entry.original,offsetPaths(entry.paths,mm,entry.automatic));
+        entry.sized={mm,source:{...source,autoCrop:entry.automatic || mm!==0}};
+      }
+      entry.measure.textContent=fmt(entry.sized.source.sourceWidth)+' × '+fmt(entry.sized.source.sourceHeight)+' mm · '+
+        (entry.automatic?'Silueta detectada':'CutContour original');
+      return entry.sized.source;
+    } catch (error) {
+      entry.measure.textContent=error.message;
+      firstError ??= new Error('Página '+(index+1)+'. '+error.message);
+      return null;
+    }
+  });
+  if (firstError) throw firstError;
+  return sources;
+}
+
 function recompute() {
   model.plan = null;
   clearExports();
@@ -123,14 +147,24 @@ function recompute() {
   note('export-status', '');
   note('layout-error', '');
   updateGeometry();
-  if (model.source) {
+  const batch=model.batch;
+  by('batch-settings').hidden=!batch;
+  by('quantity-single').hidden=!!batch;
+  by('quantity-mixed').hidden=!batch;
+  if (model.source || batch?.ready) {
     const options = Object.fromEntries(['roll','quantity','gap','margin'].map((key) => [key, by(key).valueAsNumber]));
     options.bleed = by('bleed').value === '' && !by('bleed').validity.badInput ? null : by('bleed').valueAsNumber;
-    if (options.bleed==null && (by('offset').valueAsNumber || by('contour-mode').value==='automatic')) {
-      options.bleed=Number.isFinite(options.gap) ? Math.min(1,Math.max(0,options.gap/2)) : 1;
-    }
-    try { model.plan = layout(model.source, options); }
-    catch (error) { note('layout-error', error.message); }
+    try {
+      if (batch) {
+        options.quantity=by('batch-copies').valueAsNumber;
+        model.plan=layoutMixed(mixedSources(),options);
+      } else {
+        if (options.bleed==null && (by('offset').valueAsNumber || by('contour-mode').value==='automatic')) {
+          options.bleed=Number.isFinite(options.gap) ? Math.min(1,Math.max(0,options.gap/2)) : 1;
+        }
+        model.plan=layout(model.source,options);
+      }
+    } catch (error) { note('layout-error', error.message); }
   }
   const plan = model.plan;
   model.page = Math.min(model.page, (plan?.panels.length ?? 1)-1);
@@ -146,16 +180,18 @@ function recompute() {
   }));
   by('panel').value = model.page;
   by('stat-count').textContent = plan ? fmt(plan.quantity) : '—';
-  by('stat-grid').textContent = plan ? fmt(plan.columns)+' × '+fmt(plan.rows) : '—';
+  by('grid-label').textContent = batch ? 'Filas' : 'Columnas × filas';
+  by('stat-grid').textContent = !plan ? '—' : batch ? fmt(plan.rows) : fmt(plan.columns)+' × '+fmt(plan.rows);
   by('stat-length').textContent = plan ? fmt(plan.total)+' mm' : '—';
-  by('proof-info').textContent = model.source
-    ? 'Etiqueta de '+fmt(model.source.sourceWidth)+' × '+fmt(model.source.sourceHeight)+' mm'
+  by('proof-info').textContent = batch
+    ? fmt(batch.entries.length)+' páginas · Tamaños originales'
+    : model.source ? 'Etiqueta de '+fmt(model.source.sourceWidth)+' × '+fmt(model.source.sourceHeight)+' mm'
     : model.original ? 'Ajusta la línea de corte para ver el montaje.' : 'Carga un archivo para calcular el montaje.';
   refreshButtons();
   scheduleDraw();
 }
 
-async function thumbnail(source) {
+async function thumbnail(source,{limit=1800,readPixels=true}={}) {
   pdfjs ??= import('./vendor/pdf.mjs').then((module) => {
     module.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdf.worker.mjs', import.meta.url).href;
     return module;
@@ -169,14 +205,14 @@ async function thumbnail(source) {
     const pdf = await task.promise;
     const page = await pdf.getPage(1);
     const original = page.getViewport({scale:1});
-    const view = page.getViewport({scale:Math.min(6,1800/Math.max(original.width,original.height))});
+    const view = page.getViewport({scale:Math.min(6,limit/Math.max(original.width,original.height))});
     const target = document.createElement('canvas');
     target.width = Math.max(1,Math.ceil(view.width));
     target.height = Math.max(1,Math.ceil(view.height));
-    const ctx=target.getContext('2d',{willReadFrequently:true});
+    const ctx=target.getContext('2d',{willReadFrequently:readPixels});
     const transform=[target.width/view.width,0,0,target.height/view.height,0,0];
     await page.render({canvasContext:ctx,viewport:view,transform,background:'rgba(0,0,0,0)'}).promise;
-    return {image:target,raster:ctx.getImageData(0,0,target.width,target.height)};
+    return {image:target,raster:readPixels ? ctx.getImageData(0,0,target.width,target.height) : null};
   } finally {
     await task.destroy();
   }
@@ -188,9 +224,90 @@ function changeView(mode) {
   scheduleDraw();
 }
 
+function batchEntry(original,index) {
+  const row=document.createElement('div');
+  const label=document.createElement('label');
+  const measure=document.createElement('span');
+  const offset=document.createElement('input');
+  const field=document.createElement('span');
+  const unit=document.createElement('span');
+  measure.className='field-help';
+  measure.textContent='Pendiente';
+  offset.type='number';
+  offset.min='-5080';
+  offset.max='5080';
+  offset.step='any';
+  offset.placeholder='Común';
+  field.className='field';
+  unit.textContent='mm';
+  field.append(offset,unit);
+  label.append('Página '+(index+1),field,measure);
+  row.append(label);
+  return {original,offset,measure,row,automatic:!original.paths.length,paths:original.paths};
+}
+
+async function loadBatch(sources,version) {
+  const batch={entries:sources.map(batchEntry),ready:false};
+  model.batch=batch;
+  by('batch-offset').value=0;
+  by('batch-copies').value=1;
+  by('batch-pages').open=false;
+  by('batch-list').replaceChildren(...batch.entries.map((entry)=>entry.row));
+  by('filemeta').textContent=fmt(sources.length)+' páginas';
+  changeView('overlay');
+  recompute();
+  await prepareBatch(batch,version);
+}
+
+async function prepareBatch(batch,version,retry=false) {
+  const tolerance=by('batch-tolerance').valueAsNumber;
+  if (!Number.isFinite(tolerance) || tolerance<1 || tolerance>120) {
+    note('file-status','Introduce una tolerancia del fondo entre 1 y 120.',true);
+    return;
+  }
+  batch.ready=false;
+  by('batch-retry').disabled=true;
+  recompute();
+  for (const [index,entry] of batch.entries.entries()) {
+    if (retry && !entry.automatic) continue;
+    note('file-status','Analizando página '+(index+1)+' de '+batch.entries.length+'…');
+    entry.sized=null;
+    entry.error='';
+    try {
+      const {image,raster}=await thumbnail(entry.original,{limit:entry.automatic ? 1800 : 420,readPixels:entry.automatic});
+      if (version!==model.version) return;
+      if (entry.automatic) {
+        const scale=Math.min(1,420/Math.max(image.width,image.height));
+        const small=document.createElement('canvas');
+        small.width=Math.max(1,Math.round(image.width*scale));
+        small.height=Math.max(1,Math.round(image.height*scale));
+        small.getContext('2d').drawImage(image,0,0,small.width,small.height);
+        entry.thumb=small;
+        entry.paths=detect(raster,entry.original.artwork,tolerance);
+      } else entry.thumb=image;
+    } catch (error) {
+      if (version!==model.version) return;
+      if (entry.automatic) {
+        entry.paths=null;
+        entry.error=error.message || 'No se pudo detectar la silueta.';
+        entry.measure.textContent=entry.error;
+      }
+    }
+  }
+  batch.ready=true;
+  by('batch-retry').disabled=false;
+  by('batch-detection').hidden=!batch.entries.some((entry)=>entry.automatic);
+  const failed=batch.entries.filter((entry)=>!entry.paths);
+  note('file-status',failed.length
+    ? 'Revisa las páginas cuya silueta no se pudo detectar.'
+    : fmt(batch.entries.length)+' páginas con corte preparado',!!failed.length);
+  if (failed.length) by('batch-pages').open=true;
+  recompute();
+}
+
 async function load(name,read) {
   const version=++model.version;
-  Object.assign(model,{original:null,source:null,name,thumb:null,raster:null,thumbError:false,page:0,detection:null,geometry:null,sized:null,zoom:1,displayScale:0,zoomAnchor:null});
+  Object.assign(model,{original:null,batch:null,source:null,name,thumb:null,raster:null,thumbError:false,page:0,detection:null,geometry:null,sized:null,zoom:1,displayScale:0,zoomAnchor:null});
   by('filename').hidden=false;
   by('filename').textContent=name;
   by('filemeta').textContent='Leyendo archivo…';
@@ -203,10 +320,17 @@ async function load(name,read) {
     const png=bytes[0]===137 && bytes[1]===80 && bytes[2]===78 && bytes[3]===71;
     const pdf=new TextDecoder('latin1').decode(bytes.subarray(0,1024)).includes('%PDF-');
     if (!pdf && !jpg && !png) throw new Error('Selecciona un PDF, JPG o PNG.');
-    const source=jpg || png ? await openImage(bytes,png?'png':'jpg') : await inspect(bytes,{allowNoCut:true});
+    const sources=pdf ? await inspectPages(bytes,{allowNoCut:true}) : [await openImage(bytes,png?'png':'jpg')];
     if (version!==model.version) return;
-    model.original=source;
     by('file-icon').textContent=jpg?'JPG':png?'PNG':'PDF';
+    if (sources.length>1) {
+      by('batch-tolerance').value=30;
+      by('batch-detection').hidden=true;
+      await loadBatch(sources,version);
+      return;
+    }
+    const [source]=sources;
+    model.original=source;
     by('size-mode').value=source.image ? 'width' : 'percent';
     by('size-value').value=source.image ? '' : '100';
     by('reference-width').value='';
@@ -250,49 +374,57 @@ function draw() {
   ctx.fillRect(0,0,plan.roll,panel.length);
   ctx.lineWidth = .85/scale;
 
+  const items=plan.items ?? [{...plan,source:model.source}];
+  const thumbs=model.batch ? model.batch.entries.map((entry)=>entry.thumb) : [model.thumb];
   if (model.mode !== 'cut') {
-    const [left,bottom,right,top] = model.source.artwork;
-    const [x0,y0,x1,y1] = plan.printBounds;
-    const dx=(x0-plan.artwork[0])/PT,dy=(plan.artwork[3]-y1)/PT;
-    for (const [x,y] of panel.positions) {
-      if (model.thumb) {
-        const sx = model.thumb.width/(right-left), sy = model.thumb.height/(top-bottom);
-        ctx.drawImage(model.thumb,(x0-left)*sx,(top-y1)*sy,(x1-x0)*sx,(y1-y0)*sy,x+dx,y+dy,(x1-x0)/PT,(y1-y0)/PT);
-      }
-      else {
+    for (const [x,y,index=0] of panel.positions) {
+      const {source,printBounds,artwork,width,height}=items[index];
+      const thumb=thumbs[index];
+      if (thumb) {
+        const [left,bottom,right,top]=source.artwork;
+        const [x0,y0,x1,y1]=printBounds;
+        const sx=thumb.width/(right-left),sy=thumb.height/(top-bottom);
+        const dx=(x0-artwork[0])/PT,dy=(artwork[3]-y1)/PT;
+        if (x1>x0 && y1>y0) ctx.drawImage(thumb,(x0-left)*sx,(top-y1)*sy,(x1-x0)*sx,(y1-y0)*sy,x+dx,y+dy,(x1-x0)/PT,(y1-y0)/PT);
+      } else {
         ctx.fillStyle = '#eff4ef';
-        ctx.fillRect(x,y,plan.width,plan.height);
+        ctx.fillRect(x,y,width,height);
         ctx.strokeStyle = '#9cafa1';
-        ctx.strokeRect(x,y,plan.width,plan.height);
+        ctx.strokeRect(x,y,width,height);
       }
     }
   }
   if (model.mode !== 'print') {
-    const [left,,,top] = plan.artwork;
+    const outlines=new Map();
     ctx.strokeStyle = '#c21b72';
-    for (const path of model.source.paths) {
-      const vector = new Path2D();
-      for (const [op, ...coords] of path) {
-        const values = coords.map((value,index) => index%2 ? (top-value)/PT : (value-left)/PT);
-        if (op === 'm') vector.moveTo(...values);
-        if (op === 'l') vector.lineTo(...values);
-        if (op === 'c') vector.bezierCurveTo(...values);
-        if (op === 'h') vector.closePath();
+    for (const [x,y,index=0] of panel.positions) {
+      if (!outlines.has(index)) {
+        const {source,artwork:[left,,,top]}=items[index];
+        const vector=new Path2D();
+        for (const path of source.paths) {
+          for (const [op,...coords] of path) {
+            const values=coords.map((value,axis)=>axis%2 ? (top-value)/PT : (value-left)/PT);
+            if (op==='m') vector.moveTo(...values);
+            if (op==='l') vector.lineTo(...values);
+            if (op==='c') vector.bezierCurveTo(...values);
+            if (op==='h') vector.closePath();
+          }
+        }
+        outlines.set(index,vector);
       }
-      for (const [x,y] of panel.positions) {
-        ctx.save();
-        ctx.translate(x,y);
-        ctx.stroke(vector);
-        ctx.restore();
-      }
+      ctx.save();
+      ctx.translate(x,y);
+      ctx.stroke(outlines.get(index));
+      ctx.restore();
     }
   }
   ctx.fillStyle = '#000';
   for (const [x,y] of panel.marks) ctx.fillRect(x,y,3,3);
   by('sheet-width').textContent = fmt(plan.roll)+' mm';
   by('proof-marks').textContent = panel.marks.length+' marcas · '+fmt(panel.length)+' mm de largo';
-  note('preview-message', model.mode !== 'cut' && !model.thumb
-    ? model.thumbError ? 'No se pudo dibujar la gráfica en la vista previa.' : 'Dibujando la gráfica…' : '');
+  const missingPreview=panel.positions.some(([, ,index=0])=>!thumbs[index]);
+  note('preview-message', model.mode !== 'cut' && missingPreview
+    ? model.thumbError || model.batch ? 'No se pudo dibujar parte de la gráfica en la vista previa.' : 'Dibujando la gráfica…' : '');
   by('zoom-value').value=fmt(model.zoom*100)+' %';
   by('zoom-in').disabled=model.zoom>=8;
   by('zoom-out').disabled=model.zoom<=.5;
@@ -397,8 +529,12 @@ by('settings').addEventListener('input', (event) => {
       input.value=dimensions ? Number(dimensions[mode].toFixed(5)) : '';
     }
   }
-  if (event.target.id==='offset' || event.target.id==='contour-mode') changeView('overlay');
+  if (event.target.id==='batch-tolerance') return;
+  if (['offset','contour-mode','batch-offset'].includes(event.target.id) || by('batch-list').contains(event.target)) changeView('overlay');
   recompute();
+});
+by('batch-retry').addEventListener('click',()=>{
+  if (model.batch?.ready) prepareBatch(model.batch,model.version,true);
 });
 by('panel').addEventListener('change', () => { model.page = Number(by('panel').value); scheduleDraw(); });
 by('prepare').addEventListener('click',prepareExports);

@@ -295,12 +295,29 @@ function splitStream(content, resources, context, initial, paths, depth = 0) {
   return {content: output + content.slice(last), resources: cleaned};
 }
 
-export async function inspect(bytes, {allowNoCut=false}={}) {
-  let doc;
-  try { doc = await P.PDFDocument.load(bytes, {updateMetadata: false}); }
+async function openPdf(bytes) {
+  try { return await P.PDFDocument.load(bytes, {updateMetadata: false}); }
   catch { bad('No se pudo abrir este PDF. Comprueba que no esté protegido y vuelve a exportarlo.'); }
+}
+
+export async function inspect(bytes, {allowNoCut=false}={}) {
+  const doc = await openPdf(bytes);
   if (doc.getPageCount() !== 1) bad('Sube un PDF de una sola página con una etiqueta.');
-  const page = doc.getPage(0);
+  return inspectPage(doc, doc.getPage(0), allowNoCut);
+}
+
+export async function inspectPages(bytes, {allowNoCut=false}={}) {
+  const doc = await openPdf(bytes);
+  const pages = doc.getPages();
+  if (!pages.length) bad('El PDF no contiene páginas.');
+  if (pages.length === 1) return [inspectPage(doc, pages[0], allowNoCut)];
+  return pages.map((page,index) => {
+    try { return inspectPage(doc, page, allowNoCut); }
+    catch (error) { bad('Página '+(index+1)+'. '+error.message); }
+  });
+}
+
+function inspectPage(doc, page, allowNoCut) {
   const unit = page.node.lookupMaybe(name('UserUnit'), PDFNumber)?.asNumber() ?? 1;
   if (unit !== 1) bad('Reexporta la etiqueta en un PDF de tamaño normal, con unidades PDF estándar.');
   const rotation = ((page.getRotation().angle % 360) + 360) % 360;
@@ -376,20 +393,40 @@ export function withContour(source,paths) {
   return {...source,cutContent,paths,trim,sourceWidth:(trim[2]-trim[0])/PT,sourceHeight:(trim[3]-trim[1])/PT};
 }
 
-export function layout(source, settings) {
-  const {roll, quantity, gap, margin, bleed} = settings;
+function validateLayout({roll, quantity, gap, margin}) {
   if (!Number.isFinite(roll) || roll <= 0 || roll > 5080) bad('Introduce un ancho de bobina entre 0 y 5.080 mm.');
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 50000) bad('Introduce una cantidad entera entre 1 y 50.000.');
   if (!Number.isFinite(gap) || gap < 0) bad('Introduce una separación de 0 mm o más.');
   if (!Number.isFinite(margin) || margin < 0) bad('Introduce un margen exterior de 0 mm o más.');
+}
 
+function itemBounds(source, bleed) {
   if (bleed != null && (!Number.isFinite(bleed) || bleed < 0)) bad('Introduce un sangrado de 0 mm o más.');
   const printBounds=bleed == null ? source.artwork : source.artwork.map((edge,index)=>
     index<2 ? Math.max(edge,source.trim[index]-bleed*PT) : Math.min(edge,source.trim[index]+bleed*PT));
   const artwork=printBounds.map((edge,index)=>index<2 ? Math.min(edge,source.trim[index]) : Math.max(edge,source.trim[index]));
-  const inset = margin + 8;
   const width = (artwork[2]-artwork[0])/PT;
   const height = (artwork[3]-artwork[1])/PT;
+  return {artwork, printBounds, width, height};
+}
+
+function registrationMarks(length, margin, left, right) {
+  const start = margin, finish = length-margin-3;
+  const levels = [start];
+  if (length > 500+1e-7) {
+    for (let y = start+400; y < finish-1e-7; y += 400) {
+      levels.push(Math.min(y, finish-6));
+    }
+  }
+  levels.push(finish);
+  return levels.flatMap((y) => [[left-8,y],[right+5,y]]);
+}
+
+export function layout(source, settings) {
+  const {roll, quantity, gap, margin, bleed} = settings;
+  validateLayout(settings);
+  const {artwork, printBounds, width, height} = itemBounds(source, bleed);
+  const inset = margin + 8;
   const pitchX = source.sourceWidth + gap;
   const pitchY = source.sourceHeight + gap;
   const available = roll - 2*inset;
@@ -416,19 +453,68 @@ export function layout(source, settings) {
     const positions = Array.from({length:count}, (_, index) => [
       left+(index%columns)*pitchX, inset+Math.floor(index/columns)*pitchY,
     ]);
-    const start = margin, finish = length-margin-3;
-    const levels = [start];
-    if (length > 500+1e-7) {
-      for (let y = start+400; y < finish-1e-7; y += 400) {
-        levels.push(Math.min(y, finish-6));
-      }
-    }
-    levels.push(finish);
-    const marks = levels.flatMap((y) => [[left-8,y],[right+5,y]]);
+    const marks = registrationMarks(length, margin, left, right);
     panels.push({length, positions, marks, rows:rowCount});
     remaining -= count;
   }
   return {roll, quantity, columns, rows, panels, artwork, printBounds, width, height, gap, total:panels.reduce((n,p) => n+p.length,0)};
+}
+
+export function layoutMixed(sources, settings) {
+  const {roll, quantity, gap, margin, bleed} = settings;
+  validateLayout(settings);
+  const count = sources.length * quantity;
+  if (!sources.length || count > 50000) bad('El montaje admite entre 1 y 50.000 etiquetas en total.');
+
+  const inset = margin + 8;
+  const available = roll - 2*inset;
+  const maxLength = 5000 - 2*inset;
+  const items = sources.map((source,index) => {
+    const item = itemBounds(source, bleed ?? (source.autoCrop ? Math.min(1,gap/2) : null));
+    if (item.width > available + 1e-7) bad('La página '+(index+1)+' y sus zonas de registro no caben en el ancho de bobina.');
+    if (item.height > maxLength + 1e-7) bad('La página '+(index+1)+' con los márgenes supera el largo máximo de un paño PDF.');
+    return {...item,source};
+  });
+
+  const panels = [];
+  let row = {width:0,height:0,labels:[]};
+  let rows = [];
+  let length = 0;
+  let rowCount = 0;
+  function finishPanel() {
+    const mountedWidth = rows.reduce((max,current) => Math.max(max,current.width),0);
+    let y = inset;
+    const positions = [];
+    for (const current of rows) {
+      const left = (roll-current.width)/2;
+      for (const [x,index] of current.labels) positions.push([left+x,y,index]);
+      y += current.height+gap;
+    }
+    const fullLength = length+2*inset;
+    const left = (roll-mountedWidth)/2;
+    panels.push({length:fullLength, positions, marks:registrationMarks(fullLength,margin,left,left+mountedWidth), rows:rows.length});
+    rows = [];
+    length = 0;
+  }
+  function finishRow() {
+    if (rows.length && length+gap+row.height > maxLength+1e-7) finishPanel();
+    length += (rows.length ? gap : 0)+row.height;
+    rows.push(row);
+    rowCount++;
+    row = {width:0,height:0,labels:[]};
+  }
+  for (let copy = 0; copy < quantity; copy++) {
+    for (const [index,{width,height}] of items.entries()) {
+      if (row.labels.length && row.width+gap+width > available+1e-7) finishRow();
+      const x = row.labels.length ? row.width+gap : 0;
+      row.labels.push([x,index]);
+      row.width = x+width;
+      row.height = Math.max(row.height,height);
+    }
+  }
+  finishRow();
+  finishPanel();
+  return {roll, quantity:count, rows:rowCount, items, panels, total:panels.reduce((n,p) => n+p.length,0)};
 }
 
 function spot(context) {
@@ -436,16 +522,22 @@ function spot(context) {
   return context.obj(['Separation', 'CutContour', 'DeviceCMYK', fn]);
 }
 
-function addPanel(doc, ref, artwork, plan, panel) {
+function addPanel(doc, items, plan, panel) {
   const page = doc.addPage([plan.roll*PT,panel.length*PT]);
   page.setCropBox(0,0, plan.roll*PT,panel.length*PT);
   page.setTrimBox(0,0, plan.roll*PT,panel.length*PT);
-  page.node.setXObject(name('Etiqueta'), ref);
+  const registered = new Set();
   let mounted = '';
-  for (const [x, y] of panel.positions) {
+  for (const [x, y, index=0] of panel.positions) {
+    const {ref,artwork,height} = items[index];
+    const label = 'Etiqueta'+index;
+    if (!registered.has(index)) {
+      page.node.setXObject(name(label), ref);
+      registered.add(index);
+    }
     const offsetX = x*PT-artwork[0];
-    const offsetY = (panel.length-y-plan.height)*PT-artwork[1];
-    mounted += 'q 1 0 0 1 '+line(offsetX)+' '+line(offsetY)+' cm /Etiqueta Do Q\n';
+    const offsetY = (panel.length-y-height)*PT-artwork[1];
+    mounted += 'q 1 0 0 1 '+line(offsetX)+' '+line(offsetY)+' cm /'+label+' Do Q\n';
   }
   mounted += 'q 0 0 0 1 k\n';
   for (const [x, y] of panel.marks) {
@@ -459,8 +551,22 @@ async function printDocument(source,plan) {
   const print=await P.PDFDocument.create();
   print.setTitle('Plotter Fácil – Impresión');
   const copier=PDFObjectCopier.for(source.doc.context,print.context);
-  const artwork=plan.artwork ?? source.artwork;
-  const printBounds=plan.printBounds ?? source.artwork;
+  const items=mountItems(source,plan);
+  const forms=items.map((item) => ({...item,ref:printItem(print,copier,item)}));
+  for (const key of ['OutputIntents','OCProperties']) {
+    const value=source.doc.catalog.get(name(key));
+    if (value) print.catalog.set(name(key),copier.copy(value));
+  }
+  for (const panel of plan.panels) addPanel(print,forms,plan,panel);
+  return print.save({useObjectStreams:false});
+}
+
+function mountItems(source,plan) {
+  return plan.items ?? [{source,artwork:plan.artwork ?? source.artwork,
+    printBounds:plan.printBounds ?? source.artwork,height:plan.height}];
+}
+
+function printItem(print,copier,{source,printBounds}) {
   const printForm=copier.copy(source.printForm);
   if (printBounds!==source.artwork) {
     const {inverse}=formClip(source.matrix,printBounds);
@@ -469,13 +575,7 @@ async function printDocument(source,plan) {
       Math.min(a[0],b[0]),Math.min(a[1],b[1]),Math.max(a[0],b[0]),Math.max(a[1],b[1]),
     ]));
   }
-  const printRef=print.context.register(printForm);
-  for (const key of ['OutputIntents','OCProperties']) {
-    const value=source.doc.catalog.get(name(key));
-    if (value) print.catalog.set(name(key),copier.copy(value));
-  }
-  for (const panel of plan.panels) addPanel(print,printRef,artwork,plan,panel);
-  return print.save({useObjectStreams:false});
+  return print.context.register(printForm);
 }
 
 export async function renderSource(source) {
@@ -487,13 +587,15 @@ export async function renderSource(source) {
 export async function build(source,plan) {
   const cut=await P.PDFDocument.create();
   cut.setTitle('Plotter Fácil – Corte');
-  const artwork=plan.artwork ?? source.artwork;
-  const cutBox=artwork.map((value,index)=>value+(index<2?-1:1));
-  const cutForm=cut.context.flateStream(encode(source.cutContent),{Type:'XObject',Subtype:'Form',FormType:1,
-    BBox:cutBox,Resources:cut.context.obj({ColorSpace:{CC:spot(cut.context)}})});
-  const cutRef=cut.context.register(cutForm);
-  for (const panel of plan.panels) addPanel(cut,cutRef,artwork,plan,panel);
-  return Promise.all([printDocument(source,plan),cut.save({useObjectStreams:false})]);
+  const resources=cut.context.obj({ColorSpace:{CC:spot(cut.context)}});
+  const forms=mountItems(source,plan).map((item) => {
+    const cutBox=item.artwork.map((value,index)=>value+(index<2?-1:1));
+    const form=cut.context.flateStream(encode(item.source.cutContent),{Type:'XObject',Subtype:'Form',FormType:1,
+      BBox:cutBox,Resources:resources});
+    return {...item,ref:cut.context.register(form)};
+  });
+  for (const panel of plan.panels) addPanel(cut,forms,plan,panel);
+  return Promise.all([printDocument(source ?? plan.items[0].source,plan),cut.save({useObjectStreams:false})]);
 }
 
 export async function sample(automatic=false) {

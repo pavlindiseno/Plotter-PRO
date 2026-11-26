@@ -12,7 +12,7 @@
 <link rel="stylesheet" href="./style.css?v=6">
 <script src="./vendor/pdf-lib.js" defer></script>
 <script src="./vendor/clipper.js" defer></script>
-<script type="module" src="./app.mjs?v=7"></script>
+<script type="module" src="./app.mjs?v=8"></script>
 <script defer src="./install.js"></script>
 </head>
 <body>
@@ -28,7 +28,7 @@
         <div class="section-heading"><h2>Archivo original</h2><button id="demo" class="quiet" type="button">Probar ejemplo</button></div>
         <div class="drop" id="drop">
           <span id="file-icon" class="file-icon" aria-hidden="true">PDF</span>
-          <span class="file-caption"><small id="filename" hidden></small><small id="filemeta">PDF de una página, JPG o PNG. También puedes arrastrarlo aquí.</small></span>
+          <span class="file-caption"><small id="filename" hidden></small><small id="filemeta">PDF de una o varias páginas, JPG o PNG. También puedes arrastrarlo aquí.</small></span>
           <label class="file-choice" style="grid-column: 1 / -1">
             <strong>Elegir de Fotos</strong>
             <input id="photo" type="file" accept="image/*" aria-describedby="filemeta">
@@ -61,10 +61,25 @@
           <p class="field-help">Los valores positivos desplazan el corte hacia fuera. Los negativos lo meten en el dibujo.</p>
           <p id="contour-error" class="error" role="alert" hidden></p>
         </div>
+        <div id="batch-settings" class="contour-settings" hidden>
+          <h2>Líneas de corte por página</h2>
+          <label>Desplazamiento común <span class="field"><input id="batch-offset" type="number" min="-5080" max="5080" step="any" value="0"><span>mm</span></span></label>
+          <p class="field-help">Una etiqueta por página a tamaño original. Usa valores positivos para sacar el corte y negativos para meterlo. Se conserva el CutContour original cuando existe y se detecta la silueta en las demás páginas.</p>
+          <div id="batch-detection" class="inputs" hidden>
+            <label>Tolerancia del fondo <span class="field"><input id="batch-tolerance" type="number" min="1" max="120" value="30"></span></label>
+            <button type="button" class="quiet" id="batch-retry">Volver a detectar siluetas</button>
+          </div>
+          <details id="batch-pages" class="crop">
+            <summary>Ajustar desplazamiento por página</summary>
+            <p class="field-help">Deja el campo vacío para usar el desplazamiento común.</p>
+            <div id="batch-list" class="inputs"></div>
+          </details>
+        </div>
         <h2>Bobina y tirada</h2>
         <div class="inputs">
           <label>Ancho de bobina <span class="field"><input id="roll" type="number" min="0.01" max="5080" step="any" value="1370"><span>mm</span></span></label>
-          <label>Cantidad <span class="field"><input id="quantity" type="number" min="1" max="50000" value="100"><span>uds.</span></span></label>
+          <label id="quantity-single">Cantidad <span class="field"><input id="quantity" type="number" min="1" max="50000" value="100"><span>uds.</span></span></label>
+          <label id="quantity-mixed" hidden>Copias de cada página <span class="field"><input id="batch-copies" type="number" min="1" max="50000" value="1"><span>uds.</span></span></label>
           <label>Entre contornos <span class="field"><input id="gap" type="number" min="0" step="any" value="3"><span>mm</span></span></label>
           <label>Margen exterior <span class="field"><input id="margin" type="number" min="0" step="any" value="10"><span>mm</span></span></label>
         </div>
@@ -117,7 +132,7 @@
       </div>
       <div class="stats">
         <div><span>Copias</span><strong id="stat-count">—</strong></div>
-        <div><span>Columnas × filas</span><strong id="stat-grid">—</strong></div>
+        <div><span id="grid-label">Columnas × filas</span><strong id="stat-grid">—</strong></div>
         <div><span>Largo total</span><strong id="stat-length">—</strong></div>
       </div>
     </section>

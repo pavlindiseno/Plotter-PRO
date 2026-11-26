@@ -1,8 +1,8 @@
 const cachePrefix = 'plotter-facil-app-';
-const cacheName = cachePrefix + '1';
+const cacheName = cachePrefix + '2';
 const assets = [
-  './', './manifest.webmanifest', './install.js', './style.css?v=6', './app.mjs?v=7',
-  './engine.mjs?v=5', './engine.mjs', './contour.mjs', './plotter-logo.png',
+  './', './manifest.webmanifest', './install.js', './style.css?v=6', './app.mjs?v=8',
+  './engine.mjs?v=6', './engine.mjs', './contour.mjs', './plotter-logo.png',
   './icon-192.png', './icon-512.png', './vendor/pdf-lib.js', './vendor/clipper.js',
   './vendor/pdf.mjs', './vendor/pdf.worker.mjs',
 ];
